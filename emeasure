@@ -1,0 +1,419 @@
+function eeg=emeasure(directory,eeg,calc,unres)
+
+cutoff_method=input('How do you want to threshold the graph? Average degree number - 1. Defined cutoff value -2.');
+if cutoff_method==1
+    avg_edg=input('How many average edges do you want your graph to have?');
+elseif cutoff_method==2
+    min_wght=input('What minimum weight do you want your graph to have?');
+end
+    
+
+folders=dir(directory);
+folders=folders(cell2mat(arrayfun(@(x) (length(x.name)),folders,'UniformOutput',0))==6);
+
+%Excluded patients
+%sanser
+%grireg, cpsBict3_nm file too short
+%aceles, redownload bsl1_hg
+%rensea, missing cpsBpre_raw
+%aceles, some leads in raw have different names
+%quijua, some leads in raw have different names
+
+ex={'sanser','grireg','rensea','aceles','quijua'};  %exclude the following patients
+names={folders.name};    %folder names
+[~,~,ex]=intersect(ex,names); %corresponding folder and patient names
+foldind=setxor(1:length(folders),ex); %folder index
+
+
+totpt=num2str(numel(foldind));
+if isempty(eeg)  %make the eeg structure by loading all the data,if eeg structure already exists, skip and go to calculation steps
+for m=1:length(foldind)
+    p=foldind(m);
+    ptnum=num2str(m);
+    disp(['Importing data from patient ',ptnum,'/',totpt]);
+    clear szlabel sztype
+    cd([directory,folders(p).name,'/'])
+    
+    %each folder is the name of a patient
+    %it contains files in following format
+    %{type}{letter}{time}_{montage}
+      %type:SPS,CPS,CPS2gen,subcl
+      %letter:A,B,C,etc.
+      %time: pre, ict1, ict2, ict3, post
+      %montage: nm-normal:default setting on recording system
+                %hg-high gamma: filtered >70 Hz on recording system
+                %raw-raw data
+    %bsl{number}_{montage}: baseline-interictal recordings
+    
+    
+    
+    allfiles=dir('*.txt');  %select all .txt files in folder, meaning all recording files
+    
+    %generate file indices of the different file type in the folder
+    bsl=~cell2mat(arrayfun(@(x) isempty(strfind(x.name,'bsl')), allfiles,'UniformOutput',0));
+    bslraw=bsl;
+    sz=~bsl;
+    szraw=~bsl;
+    bsl=bsl & ~cell2mat(arrayfun(@(x) isempty(strfind(x.name,'_nm')),allfiles,'UniformOutput',0)); %
+    bslraw=bslraw & ~cell2mat(arrayfun(@(x) isempty(strfind(x.name,'_raw')),allfiles,'UniformOutput',0));
+    szraw=szraw & ~cell2mat(arrayfun(@(x) isempty(strfind(x.name,'_raw')),allfiles,'UniformOutput',0));
+    sz=sz & ~cell2mat(arrayfun(@(x) isempty(strfind(x.name,'_nm')),allfiles,'UniformOutput',0));
+    files.bsl=allfiles(bsl);
+    files.bslraw=allfiles(bslraw);
+    pre=cell2mat(arrayfun(@(x) ~isempty(strfind(x.name,'pre_nm')),allfiles(sz),'UniformOutput',0));
+    pre=double(pre);
+    pre(pre>0)=cell2mat(arrayfun(@(x) ~isempty(strfind(x.name,'pre_nm')).*strfind(x.name,'pre_nm'),allfiles(sz),'UniformOutput',0));
+    
+    pred=find(pre);
+    szd=find(sz);
+    files.sz=reshape(struct(allfiles(1:5*nnz(pre))),nnz(pre),5);
+    
+    for i=1:nnz(pre)
+        szlabel{i}=allfiles(szd(pred(i))).name(pre(pred(i))-1);
+        sztype{i}=allfiles(szd(pred(i))).name(1:pre(pred(i))-2);
+        files.sz(i,:)=allfiles([szd(pred(i)),szd(pred(i))-12:3:szd(pred(i))-3]);
+    end
+    eeg(m).sztype=sztype'; %seizure type
+    eeg(m).szlabel=szlabel'; %label, e.g. cpsB
+    eeg(m).name=folders(p).name; %patient name
+    
+    preraw=cell2mat(arrayfun(@(x) ~isempty(strfind(x.name,'pre_raw')),allfiles(szraw),'UniformOutput',0));
+    prerawd=find(preraw);
+    szrawd=find(szraw);
+    files.szraw=reshape(struct(allfiles(1:5*nnz(preraw))),nnz(preraw),5);
+    
+    for i=1:nnz(preraw)
+        files.szraw(i,:)=allfiles([szrawd(prerawd(i)),szrawd(prerawd(i))-12:3:szrawd(prerawd(i))-3]);
+    end
+    
+    for k=1:size(files.bsl,1)
+        if k==1
+            import = importdata(files.bsl(k).name,'\t',1);
+            datacube = import.data; %put data into a matrix
+            leads=import.textdata;
+            if length(leads)>size(datacube,2) %check if there is an extra lead
+                leads=leads(1:size(datacube,2)); %remove extra leads
+            end
+            ekg = ~cellfun('isempty',strfind(leads,'EKG')); %returns logical with ekg lead as 1
+            grd= ~cellfun('isempty',strfind(leads,'SG')); %does the same with ground
+            dc= cellfun('isempty',strfind(leads,'-')); %does the same with ground
+            
+            datacube=datacube(:,~(ekg+grd)); %remove ekg and ground
+            datacube=padarray(datacube,[0 0 (size(files.bsl,1)-1)],'post'); %make a data cube with the first plane containing bsl
+            
+            
+            leads=leads(~(ekg+grd+dc)); %remove ekg and ground from list of leads
+            
+        else
+            import = importdata(files.bsl(k).name,'\t',1);
+            data = import.data; %put data into a matrix
+            import_leads=import.textdata;
+            
+            if length(import_leads)>size(data,2) %check if there is an extra lead
+                import_leads=import_leads(1:size(data,2)); %remove extra leads
+            end
+
+            if isempty(intersect(leads,import_leads))
+                datacube=datacube(:,:,1:k-1);
+                break
+            else
+               [leads,indb,inds]=intersect(leads,import_leads); %find common leads 
+            end
+            
+            [indb,indbind]=sort(indb); %put baseline indices of common leads back in original order
+            datacube=datacube(:,indb,:); %remove non-common leads from baseline
+            leads=leads(indbind); %put common baseline lead names back in original order
+            [inds,indsind]=sort(inds); %put common lead indices from seizure back in original order
+            import_leads=import_leads(inds);
+            data=data(:,inds); %take only common leads
+            
+            datacube(:,:,k)=data; %import into datacube
+        end
+    end
+    eeg(m).bsl.datacube=datacube;
+    eeg(m).leads=leads;
+    
+    for k=1:size(eeg(m).szlabel,1)
+        
+        for j=1:5
+            
+            if j==1
+                import = importdata(files.sz(k,j).name,'\t',1);
+                data = import.data; %put data into a matrix
+                import_leads=import.textdata;
+                
+                if length(import_leads)>size(data,2) %check if there is an extra lead
+                    import_leads=import_leads(1:size(data,2)); %remove extra leads
+                end
+                
+                [eeg(m).leads,indb,inds]=intersect(eeg(m).leads,import_leads); %find common leads
+                [indb,indbind]=sort(indb); %put baseline indices of common leads back in original order
+                eeg(m).bsl.datacube=eeg(m).bsl.datacube(:,indb,:); %remove non-common leads from baseline
+                if k>1
+                    for i=1:k-1
+                        eeg(m).sz(i).datacube=eeg(m).sz(i).datacube(:,indb,:); %remove non-common leads from baseline
+                    end
+                end
+                eeg(m).leads=eeg(m).leads(indbind); %put common baseline lead names back in original order
+                [inds,indsind]=sort(inds); %put common lead indices from seizure back in original order
+                import_leads=import_leads(inds);
+                
+                data=data(:,inds); %take only common leads
+                datacube=padarray(data,[0 0 4],'post');
+                
+            else
+                
+                import = importdata(files.sz(k,j).name,'\t',1);
+                data = import.data; %put data into a matrix
+                import_leads=import.textdata;
+                
+                data=data(:,inds);
+                
+                datacube(:,:,j)=data;
+            end
+            
+        end
+        
+        eeg(m).sz(k).datacube=datacube;
+        
+        
+    end
+    
+    
+    datacube=zeros(size(eeg(m).bsl.datacube));
+    for k=1:size(eeg(m).bsl.datacube,3)
+        
+        import=importdata(files.bslraw(k).name,'\t',1);
+        for n=1:length(eeg(m).leads)
+            
+            dash=strfind(eeg(m).leads{n},'-');
+            lead1=eeg(m).leads{n}(1:dash-1);
+            lead2=eeg(m).leads{n}(dash+1:end);
+            
+            lead1ind=strcmpi(import.colheaders,lead1);
+            lead2ind=strcmpi(import.colheaders,lead2);
+            datacube(:,n,k)=import.data(:,lead1ind)-import.data(:,lead2ind);
+            
+        end
+        
+    end
+    eeg(m).bslraw.datacube=datacube;
+    
+    
+    for k=1:size(eeg(m).szlabel)
+        
+        datacube=zeros(size(eeg(m).sz(k).datacube));
+        for j=1:5
+            import=importdata(files.szraw(k,j).name,'\t',1);
+            for n=1:length(eeg(m).leads)
+                
+                dash=strfind(eeg(m).leads{n},'-');
+                lead1=eeg(m).leads{n}(1:dash-1);
+                lead2=eeg(m).leads{n}(dash+1:end);
+                
+                lead1ind=strcmpi(import.colheaders,lead1);
+                lead2ind=strcmpi(import.colheaders,lead2);                
+                datacube(:,n,j)=import.data(:,lead1ind)-import.data(:,lead2ind);
+                
+            end
+        end
+
+        eeg(m).szraw(k).datacube=datacube;
+        
+    end
+    
+    for k=1:size(eeg(m).szlabel,1)
+        adj_cube=zeros(length(eeg(m).leads),length(eeg(m).leads),5);
+        for j=1:5
+            adj_cube(:,:,j)=corr(eeg(m).sz(k).datacube(:,:,j));
+        end
+        eeg(m).sz(k).adj_cube=adj_cube;
+    end
+    
+    adj_cube=zeros(size(eeg(m).bsl.datacube,2),size(eeg(m).bsl.datacube,2),size(eeg(m).bsl.datacube,3));
+    for j=1:size(eeg(m).bsl.datacube,3)
+        adj_cube(:,:,j)=corr(eeg(m).bsl.datacube(:,:,j));
+    end
+    eeg(m).bsl.adj_cube=adj_cube;
+end
+end
+if calc==1
+for m=1:length(foldind);
+    ptnum=num2str(m);
+    disp(['Calculating metrics for ',ptnum,'/',totpt]);
+    
+    for k=1:length(eeg(m).sz)
+        adj_cube=eeg(m).sz(k).adj_cube;
+        if cutoff_method==1
+            num_nodes=size(adj_cube,1);
+            templist=reshape(adj_cube,[num_nodes^2,size(adj_cube,3)]); %makes each correlation matrix into a single row
+            templist=sort(templist,1,'descend');
+            min_wght=templist(num_nodes+2*avg_edg*num_nodes,:);
+            
+            gg=bsxfun(@ge,adj_cube,reshape(min_wght,[1 1 5])); %creates logical matrix containing 1 wherever the correlation is greater than the min_wght
+            adj_cube(~gg)=0; %keeps only values greater than min_wght
+            
+        else
+            
+            num_nodes=size(adj_cube,1);
+            gg=adj_cube>=min_wght;
+            adj_cube(~gg)=0;
+            
+        end
+        
+        adj_cube(adj_cube>0)=1; %sets all nonzero values to 1
+        eeg(m).sz(k).adj_cube=adj_cube;
+        
+        %eeg(m).sz(k).metric=zeros(num_nodes,5,4);
+    end
+    metric=arrayfun(@(x) graphmetric(x.adj_cube),eeg(m).sz,'UniformOutput',0); 
+    conn_cube=arrayfun(@(x) conn(x.adj_cube),eeg(m).sz,'UniformOutput',0);
+    
+    for k=1:length(eeg(m).sz)
+        eeg(m).sz(k).metric=metric{k};
+        eeg(m).sz(k).conn_cube=conn_cube{k};
+    end
+    [smlwrld,dataCL]=arrayfun(@(x) smi(x.conn_cube,100),eeg(m).sz,'UniformOutput',0);
+    snczb=arrayfun(@(x) synch(x.conn_cube)',eeg(m).sz,'UniformOutput',0);
+    glob_mat=arrayfun(@(x,y,z) horzcat(x{:},y{:},z{:}),smlwrld,dataCL,snczb,'UniformOutput',0);
+    for k=1:length(eeg(m).sz)
+        eeg(m).sz(k).glob_mat=glob_mat{k};
+    end
+    
+    for k=1:length(eeg(m).bsl)
+        adj_cube=eeg(m).bsl(k).adj_cube;
+        if cutoff_method==1
+            num_nodes=size(adj_cube,1);
+            templist=reshape(adj_cube,[num_nodes^2,size(adj_cube,3)]); %makes each correlation matrix into a single row
+            templist=sort(templist,1,'descend');
+            min_wght=templist(num_nodes+2*avg_edg*num_nodes,:);
+            
+            gg=bsxfun(@ge,adj_cube,reshape(min_wght,[1 1 length(min_wght)])); %creates logical matrix containing 1 wherever the correlation is greater than the min_wght
+            adj_cube(~gg)=0; %keeps only values greater than min_wght
+            
+        else
+           
+            num_nodes=size(adj_cube,1);
+            gg=adj_cube>=min_wght;
+            adj_cube(~gg)=0;
+            
+        end
+        
+        adj_cube(adj_cube>0)=1; %sets all nonzero values to 1
+        eeg(m).bsl(k).adj_cube=adj_cube;
+        
+    end
+    
+    metric=arrayfun(@(x) graphmetric(x.adj_cube),eeg(m).bsl,'UniformOutput',0); 
+    conn_cube=arrayfun(@(x) conn(x.adj_cube),eeg(m).bsl,'UniformOutput',0);
+    
+    for k=1:length(eeg(m).bsl)
+        eeg(m).bsl(k).metric=metric{k};
+        eeg(m).bsl(k).conn_cube=conn_cube{k};
+    end
+    [smlwrld,dataCL]=arrayfun(@(x) smi(x.conn_cube,100),eeg(m).bsl,'UniformOutput',0);
+    snczb=arrayfun(@(x) synch(x.conn_cube)',eeg(m).bsl,'UniformOutput',0);
+    glob_mat=arrayfun(@(x,y,z) horzcat(x{:},y{:},z{:}),smlwrld,dataCL,snczb,'UniformOutput',0);
+    for k=1:length(eeg(m).bsl)
+        eeg(m).bsl(k).glob_mat=glob_mat{k};
+    end
+    
+end
+end
+
+if unres==1
+for m=1:length(eeg);
+    ptnum=num2str(m);
+    disp(['Calculating metrics for ',ptnum,'/',totpt]);
+    res=logical(eeg(m).res);
+    num_nodes=sum(~res);
+    
+    for k=1:size(eeg(m).szlabel,1)
+        adj_cube=zeros(num_nodes,num_nodes,5);
+        for j=1:5
+            adj_cube(:,:,j)=corr(eeg(m).sz(k).datacube(~res,~res,j));
+        end
+        
+        if cutoff_method==1
+            templist=reshape(adj_cube,[num_nodes^2,size(adj_cube,3)]); %makes each correlation matrix into a single row
+            templist=sort(templist,1,'descend');
+            min_wght=templist(num_nodes+2*avg_edg*num_nodes,:);
+            
+            gg=bsxfun(@ge,adj_cube,reshape(min_wght,[1 1 5])); %creates logical matrix containing 1 wherever the correlation is greater than the min_wght
+            adj_cube(~gg)=0; %keeps only values greater than min_wght
+            
+        else
+            
+            min_wght=input('What minimum weight do you want your graph to have?');
+            num_nodes=size(adj_cube,1);
+            gg=adj_cube>=min_wght;
+            adj_cube=adj_cube(gg);
+            
+        end
+        
+        adj_cube(adj_cube>0)=1; %sets all nonzero values to 1
+        eeg(m).sz(k).adj_cube_unres=adj_cube;
+        %eeg(m).sz(k).adj_cube_unres=eeg(m).sz(k).adj_cube(~res,~res,:);
+        
+        %eeg(m).sz(k).metric=zeros(num_nodes,5,4);
+    end
+    metric=arrayfun(@(x) graphmetric(x.adj_cube_unres),eeg(m).sz,'UniformOutput',0); 
+    conn_cube=arrayfun(@(x) conn(x.adj_cube_unres),eeg(m).sz,'UniformOutput',0);
+    for k=1:length(eeg(m).sz)
+        eeg(m).sz(k).metric_unres=metric{k};
+        eeg(m).sz(k).conn_cube_unres=conn_cube{k};
+    end
+    [smlwrld,dataCL]=arrayfun(@(x) smi(x.conn_cube_unres,100),eeg(m).sz,'UniformOutput',0);
+    snczb=arrayfun(@(x) synch(x.conn_cube_unres)',eeg(m).sz,'UniformOutput',0);
+    glob_mat=arrayfun(@(x,y,z) horzcat(x{:},y{:},z{:}),smlwrld,dataCL,snczb,'UniformOutput',0);
+    for k=1:length(eeg(m).sz)
+        eeg(m).sz(k).glob_mat_unres=glob_mat{k};
+    end
+    
+    adj_cube=zeros(num_nodes,num_nodes,size(eeg(m).bsl.datacube,3));
+    for j=1:size(eeg(m).bsl.datacube,3)
+        adj_cube(:,:,j)=corr(eeg(m).bsl.datacube(~res,~res,j));
+    end
+    
+    for k=1:length(eeg(m).bsl)
+        
+        if cutoff_method==1
+            num_nodes=size(adj_cube,1);
+            templist=reshape(adj_cube,[num_nodes^2,size(adj_cube,3)]); %makes each correlation matrix into a single row
+            templist=sort(templist,1,'descend');
+            min_wght=templist(num_nodes+2*avg_edg*num_nodes,:);
+            
+            gg=bsxfun(@ge,adj_cube,reshape(min_wght,[1 1 length(min_wght)])); %creates logical matrix containing 1 wherever the correlation is greater than the min_wght
+            adj_cube(~gg)=0; %keeps only values greater than min_wght
+            
+        else
+            
+            min_wght=input('What minimum weight do you want your graph to have?');
+            num_nodes=size(adj_cube,1);
+            gg=adj_cube>=min_wght;
+            adj_cube=adj_cube(gg);
+            
+        end
+        
+        adj_cube(adj_cube>0)=1; %sets all nonzero values to 1
+        eeg(m).bsl(k).adj_cube_unres=adj_cube;
+        
+    end
+    
+    metric=arrayfun(@(x) graphmetric(x.adj_cube_unres),eeg(m).bsl,'UniformOutput',0); 
+    conn_cube=arrayfun(@(x) conn(x.adj_cube_unres),eeg(m).bsl,'UniformOutput',0);
+    
+    for k=1:length(eeg(m).bsl)
+        eeg(m).bsl(k).metric_unres=metric{k};
+        eeg(m).bsl(k).conn_cube_unres=conn_cube{k};
+    end
+    [smlwrld,dataCL]=arrayfun(@(x) smi(x.conn_cube_unres,100),eeg(m).bsl,'UniformOutput',0);
+    snczb=arrayfun(@(x) synch(x.conn_cube_unres)',eeg(m).bsl,'UniformOutput',0);
+    glob_mat=arrayfun(@(x,y,z) horzcat(x{:},y{:},z{:}),smlwrld,dataCL,snczb,'UniformOutput',0);
+    for k=1:length(eeg(m).bsl)
+        eeg(m).bsl(k).glob_mat_unres=glob_mat{k};
+    end
+    
+end
+end
+end
