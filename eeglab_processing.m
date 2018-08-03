@@ -1,4 +1,4 @@
-%process data with eeglab: mainly to remve line noise
+%process data with eeglab: mainly to remove line noise
 %NOTE: this takes a while
 
 for i=1:length(eeg)
@@ -145,7 +145,7 @@ for m=1:length(eeg)
 end
 
 %% calculate PDC and DTF
-freq=exp(0.41:0.02:5.41);
+freq=exp(0.41:0.02:5.41); %frequencies at which to calculaute PDC and DTF
 for m=1:length(eeg)
     ptnum=num2str(m);
     for k=1:length(eeg(m).sztype)
@@ -153,12 +153,15 @@ for m=1:length(eeg)
         disp(['Calculating metrics for Sz ',sznum,' Pt ',ptnum]);
         datacube=eeg(m).szraw(k).datacube;
         nodes=size(datacube,2);
-        ord=3;
+        ord=3; 
+        
+        %order for PDC/DTF, here I set the same order for all calculations
+        %but you can also have the original DTF package (WOSSPA_Mathworks_v2) calculate an optimal order
+        
         pdc=zeros(nodes,nodes,length(freq),size(datacube,3));
         dtf=pdc;
         for j=1:size(datacube,3)
             [~,A]=arfit(datacube(:,:,j),ord,ord);
-            %[pdc(:,:,:,j),dtf(:,:,:,j)]=PDC_DTF_matrix(A,ord,512,256,256);
             [pdc(:,:,:,j),dtf(:,:,:,j)]=PDC_DTF_matrix2(A,ord,512,freq);
         end
         eeg(m).szraw(k).pdc=pdc;
@@ -188,7 +191,7 @@ parfor m=1:length(eeg)
 end
 
 
-%%
+%% calculate metrics from DTF
 cutoff_method=1;
 avg_edg=5;
 totpt=num2str(length(eeg));
