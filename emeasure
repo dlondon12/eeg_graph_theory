@@ -11,16 +11,6 @@ end
 folders=dir(directory);
 folders=folders(cell2mat(arrayfun(@(x) (length(x.name)),folders,'UniformOutput',0))==6);
 
-%Excluded patients
-%sanser
-%grireg, cpsBict3_nm file too short
-%aceles, redownload bsl1_hg
-%rensea, missing cpsBpre_raw
-%aceles, some leads in raw have different names
-%quijua, some leads in raw have different names
-
-ex={'sanser','grireg','rensea','aceles','quijua'};  %exclude the following patients
-names={folders.name};    %folder names
 [~,~,ex]=intersect(ex,names); %corresponding folder and patient names
 foldind=setxor(1:length(folders),ex); %folder index
 
